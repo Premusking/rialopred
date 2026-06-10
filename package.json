@@ -1,0 +1,50 @@
+{
+  "name": "rialopred",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test": "anchor test",
+    "verify": "NETWORK=${NETWORK:-devnet} ts-node contracts/scripts/verify.ts",
+    "deploy:devnet": "NETWORK=devnet  ts-node contracts/scripts/deploy.ts",
+    "deploy:testnet": "NETWORK=testnet ts-node contracts/scripts/deploy.ts",
+    "deploy:mainnet": "NETWORK=mainnet ts-node contracts/scripts/deploy.ts",
+    "build:contract": "anchor build",
+    "idl:generate": "anchor idl parse --file contracts/programs/prediction_market/src/lib.rs -o src/idl/prediction_market.json"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.29.0",
+    "@solana/spl-token": "^0.4.6",
+    "@solana/wallet-adapter-base": "^0.9.23",
+    "@solana/wallet-adapter-phantom": "^0.9.24",
+    "@solana/wallet-adapter-react": "^0.15.35",
+    "@solana/web3.js": "^1.91.0",
+    "chart.js": "^4.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chai": "^4.3.16",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "chai": "^4.4.1",
+    "chalk": "^4.1.2",
+    "eslint": "^8.57.0",
+    "mocha": "^10.4.0",
+    "node-fetch": "^3.3.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vite-plugin-pwa": "^0.20.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

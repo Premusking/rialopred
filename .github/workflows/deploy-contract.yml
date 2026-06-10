@@ -1,0 +1,157 @@
+name: Deploy Contract — Rialo DevNet
+
+# Trigger manually from GitHub Actions tab
+# or automatically when contract code changes on main
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: "Target network"
+        required: true
+        default: "devnet"
+        type: choice
+        options: [devnet, testnet, mainnet]
+      skip_seed_markets:
+        description: "Skip seed market creation"
+        required: false
+        default: "false"
+        type: boolean
+
+  push:
+    branches: [main]
+    paths:
+      - "contracts/programs/**"
+      - "contracts/scripts/deploy.ts"
+
+env:
+  NETWORK:      ${{ github.event.inputs.network || 'devnet' }}
+  NODE_VERSION: "20"
+  RUST_VERSION: "stable"
+
+jobs:
+  deploy-contract:
+    name: Build & Deploy Contract
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.network || 'devnet' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Toolchain setup ──────────────────────────────────────────────
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/v1.18.0/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          solana --version
+
+      - name: Install Anchor CLI
+        run: |
+          npm install -g @coral-xyz/anchor-cli
+          anchor --version
+
+      # ── Wallet setup ─────────────────────────────────────────────────
+      - name: Restore deploy wallet
+        run: |
+          mkdir -p ~/.config/solana
+          echo '${{ secrets.DEPLOY_KEYPAIR_JSON }}' > ~/.config/solana/id.json
+          echo "Wallet: $(solana-keygen pubkey ~/.config/solana/id.json)"
+
+      - name: Configure Solana for Rialo ${{ env.NETWORK }}
+        run: |
+          if [ "$NETWORK" = "devnet" ]; then
+            solana config set --url https://devnet.rialo.io/rpc
+          elif [ "$NETWORK" = "testnet" ]; then
+            solana config set --url https://testnet.rialo.io/rpc
+          else
+            solana config set --url https://mainnet.rialo.io/rpc
+          fi
+          solana config get
+          echo "Balance: $(solana balance)"
+
+      # ── Build ────────────────────────────────────────────────────────
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Anchor program
+        run: anchor build
+        working-directory: contracts
+
+      - name: Generate IDL
+        run: |
+          anchor idl parse \
+            --file contracts/programs/prediction_market/src/lib.rs \
+            -o src/idl/prediction_market.json
+          echo "IDL generated:"
+          cat src/idl/prediction_market.json | head -20
+
+      - name: Upload IDL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction_market_idl
+          path: src/idl/prediction_market.json
+
+      # ── Deploy ───────────────────────────────────────────────────────
+      - name: Deploy to Rialo ${{ env.NETWORK }}
+        run: npm run deploy:${{ env.NETWORK }}
+        env:
+          NETWORK:             ${{ env.NETWORK }}
+          SKIP_SEED_MARKETS:   ${{ github.event.inputs.skip_seed_markets }}
+          VITE_PROGRAM_ID:     ${{ secrets.VITE_PROGRAM_ID }}
+
+      # ── Verify ───────────────────────────────────────────────────────
+      - name: Verify deployment
+        run: npm run verify
+        env:
+          NETWORK: ${{ env.NETWORK }}
+
+      - name: Upload deployment manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment_manifest
+          path: deployment.json
+
+      # ── Update frontend env ──────────────────────────────────────────
+      - name: Read deployed program ID
+        id: program-id
+        run: |
+          PROGRAM_ID=$(cat deployment.json | python3 -c "import json,sys; print(json.load(sys.stdin)['programId'])")
+          echo "program_id=$PROGRAM_ID" >> $GITHUB_OUTPUT
+          echo "Deployed program ID: $PROGRAM_ID"
+
+      - name: Update Vercel env with program ID
+        if: env.NETWORK == 'devnet' || env.NETWORK == 'mainnet'
+        run: |
+          npx vercel env add VITE_PROGRAM_ID ${{ env.NETWORK }} \
+            --token ${{ secrets.VERCEL_TOKEN }} \
+            --yes <<< "${{ steps.program-id.outputs.program_id }}" || true
+          echo "Frontend env updated — triggering redeploy"
+
+      - name: Trigger frontend redeploy
+        if: env.NETWORK == 'devnet' || env.NETWORK == 'mainnet'
+        run: |
+          curl -X POST \
+            "https://api.vercel.com/v1/integrations/deploy/${{ secrets.VERCEL_DEPLOY_HOOK }}" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" || true
+
+      # ── Summary ──────────────────────────────────────────────────────
+      - name: Deployment summary
+        run: |
+          echo "## ✅ Contract Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Network | ${{ env.NETWORK }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Program ID | ${{ steps.program-id.outputs.program_id }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Markets deployed | $(cat deployment.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["markets"]))') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployed at | $(date -u) |" >> $GITHUB_STEP_SUMMARY

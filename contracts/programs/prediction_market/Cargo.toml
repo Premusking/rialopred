@@ -1,0 +1,38 @@
+[package]
+name          = "prediction_market"
+version       = "0.1.0"
+description   = "RialoPredict — on-chain prediction market with native HTTP resolution"
+edition       = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name       = "prediction_market"
+
+[features]
+no-entrypoint = []
+no-idl        = []
+no-log-ix-name = []
+cpi           = ["no-entrypoint"]
+default       = []
+
+[dependencies]
+anchor-lang    = { version = "0.29.0", features = ["init-if-needed"] }
+anchor-spl     = { version = "0.29.0", features = ["token"] }
+rialo-sdk      = { version = "0.1.0", features = ["async", "http", "oracle"] }
+serde_json     = "1.0"
+jsonpath-lib   = "0.3"
+
+[dev-dependencies]
+anchor-client  = "0.29.0"
+
+[[test]]
+name    = "prediction_market"
+path    = "tests/prediction_market.test.ts"
+
+[profile.release]
+overflow-checks = true
+lto             = "thin"
+opt-level       = 3
+
+[workspace]
+members = ["."]

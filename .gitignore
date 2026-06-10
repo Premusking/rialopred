@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.anchor/
+target/
+*.so
+*.d
+test-ledger/
+deployment.json
+devnet-usdc-mint.json
