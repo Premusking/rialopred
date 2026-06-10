@@ -1,5 +1,5 @@
 {
-  "name": "rialopred",
+  "name": "rialopred-app",
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
