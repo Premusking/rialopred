@@ -1,0 +1,25 @@
+{
+  "name": "RialoPredict",
+  "short_name": "RialoPredict",
+  "description": "On-chain prediction markets — crypto, sports, World Cup, wrestling, politics & more",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0b0e",
+  "theme_color": "#00e5a0",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/favicon.svg",    "sizes": "any",      "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/icon-192.png",   "sizes": "192x192",  "type": "image/png" },
+    { "src": "/icon-512.png",   "sizes": "512x512",  "type": "image/png" }
+  ],
+  "screenshots": [
+    { "src": "/screenshot-markets.png", "sizes": "390x844", "type": "image/png", "label": "Markets feed" },
+    { "src": "/screenshot-trading.png", "sizes": "390x844", "type": "image/png", "label": "Live trading" }
+  ],
+  "categories": ["finance", "games"],
+  "shortcuts": [
+    { "name": "Markets",    "url": "/?page=markets",     "icons": [{ "src": "/favicon.svg", "sizes": "any" }] },
+    { "name": "1-Min Bets", "url": "/?page=trading",     "icons": [{ "src": "/favicon.svg", "sizes": "any" }] },
+    { "name": "Faucet",     "url": "/?page=faucet",      "icons": [{ "src": "/favicon.svg", "sizes": "any" }] }
+  ]
+}
