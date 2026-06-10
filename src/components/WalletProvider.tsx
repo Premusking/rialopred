@@ -90,7 +90,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Try to fetch real SOL balance
       let solBal = 0;
       try {
-        const rpc = import.meta.env.VITE_RIALO_RPC_DEVNET || "https://api.devnet.solana.com";
+        const rpc = (import.meta as any).env?.VITE_RIALO_RPC_DEVNET || "https://api.devnet.solana.com";
         const res = await fetch(rpc, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
