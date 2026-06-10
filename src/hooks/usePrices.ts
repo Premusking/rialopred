@@ -3,21 +3,19 @@ import { useState, useEffect, useCallback, useRef } from "react";
 export type AssetKey = "BTC" | "ETH" | "USDNGN" | "SOL";
 
 export interface AssetConfig {
-  sym:    string;
-  step:   number;
-  fmt:    (v: number) => string;
-  color:  string;
-  binSym: string; // Binance stream symbol
+  sym:   string;
+  step:  number;
+  fmt:   (v: number) => string;
+  color: string;
 }
 
 export const ASSET_CONFIG: Record<AssetKey, AssetConfig> = {
-  BTC:    { sym: "BTC/USDT", step: 0.003, fmt: (v) => "$" + Math.round(v).toLocaleString(),  color: "#f7c948", binSym: "btcusdt" },
-  ETH:    { sym: "ETH/USDT", step: 0.004, fmt: (v) => "$" + v.toFixed(2),                    color: "#4f8ef7", binSym: "ethusdt" },
-  SOL:    { sym: "SOL/USDT", step: 0.005, fmt: (v) => "$" + v.toFixed(2),                    color: "#c084fc", binSym: "solusdt" },
-  USDNGN: { sym: "USD/NGN",  step: 0.002, fmt: (v) => "₦" + Math.round(v).toLocaleString(),  color: "#00e5a0", binSym: "" },
+  BTC:    { sym: "BTC/USDT", step: 0.003, fmt: (v) => "$" + Math.round(v).toLocaleString(),  color: "#f7c948" },
+  ETH:    { sym: "ETH/USDT", step: 0.004, fmt: (v) => "$" + v.toFixed(2),                    color: "#4f8ef7" },
+  SOL:    { sym: "SOL/USDT", step: 0.005, fmt: (v) => "$" + v.toFixed(2),                    color: "#c084fc" },
+  USDNGN: { sym: "USD/NGN",  step: 0.002, fmt: (v) => "₦" + Math.round(v).toLocaleString(),  color: "#00e5a0" },
 };
 
-// Reasonable fallbacks shown while WS connects
 const FALLBACK_PRICES: Record<AssetKey, number> = {
   BTC: 105_000, ETH: 3_800, SOL: 175, USDNGN: 1_600,
 };
@@ -54,17 +52,20 @@ function genCandles(asset: AssetKey, n: number, startPrice?: number): OHLCV[] {
   return candles;
 }
 
-// Fetch USD/NGN from a CORS-friendly free endpoint
-async function fetchNGN(): Promise<number> {
+// Calls our own Vercel serverless function — no CORS, no API key needed
+async function fetchPrices(): Promise<Partial<Record<AssetKey, number>>> {
   try {
-    // Use frankfurter.app — fully CORS open, no key needed
-    const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=NGN", {
-      signal: AbortSignal.timeout(6000),
-    });
+    const res = await fetch("/api/prices", { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error("API error " + res.status);
     const data = await res.json();
-    return data?.rates?.NGN ?? FALLBACK_PRICES.USDNGN;
+    return {
+      BTC:    data.BTC    ?? FALLBACK_PRICES.BTC,
+      ETH:    data.ETH    ?? FALLBACK_PRICES.ETH,
+      SOL:    data.SOL    ?? FALLBACK_PRICES.SOL,
+      USDNGN: data.USDNGN ?? FALLBACK_PRICES.USDNGN,
+    };
   } catch {
-    return FALLBACK_PRICES.USDNGN;
+    return {};
   }
 }
 
@@ -84,88 +85,68 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
   }));
 
   const openPricesRef = useRef<Record<AssetKey, number>>({ ...FALLBACK_PRICES });
-  const wsRef         = useRef<WebSocket | null>(null);
 
-  // ── Binance WebSocket for BTC / ETH / SOL ──────────────────────────────────
-  useEffect(() => {
-    // Combined stream: 3 mini-tickers in one connection
-    const streams = ["btcusdt", "ethusdt", "solusdt"]
-      .map(s => `${s}@ticker`)
-      .join("/");
-    const url = `wss://stream.binance.com:9443/stream?streams=${streams}`;
-
-    const connect = () => {
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onmessage = (ev) => {
-        try {
-          const msg  = JSON.parse(ev.data);
-          const data = msg.data ?? msg;
-          const sym: string = (data.s ?? "").toUpperCase(); // e.g. "BTCUSDT"
-          const price = parseFloat(data.c ?? data.p ?? "0");
-          if (!price) return;
-
-          const keyMap: Record<string, AssetKey> = {
-            BTCUSDT: "BTC", ETHUSDT: "ETH", SOLUSDT: "SOL",
-          };
-          const asset = keyMap[sym];
-          if (!asset) return;
-
-          setState((prev) => {
-            const prices  = { ...prev.prices,  [asset]: price };
-            const open    = openPricesRef.current[asset];
-            // Set open price once on first real tick
-            if (open === FALLBACK_PRICES[asset]) {
-              openPricesRef.current[asset] = price;
-            }
-            const changePct = +((price - openPricesRef.current[asset]) / openPricesRef.current[asset] * 100).toFixed(4);
-            const changes   = { ...prev.changes, [asset]: changePct };
-
-            // Update last candle close
-            const cs   = prev.candles[asset];
-            const last = cs.length ? { ...cs[cs.length - 1], c: price, h: Math.max(cs[cs.length - 1].h, price), l: Math.min(cs[cs.length - 1].l, price) } : cs[0];
-            const candles = { ...prev.candles, [asset]: [...cs.slice(0, -1), last] };
-
-            return { prices, changes, candles };
-          });
-        } catch { /* ignore parse errors */ }
-      };
-
-      ws.onerror = () => ws.close();
-      ws.onclose = () => {
-        // Reconnect after 3s if not intentionally closed
-        setTimeout(() => { if (wsRef.current === ws) connect(); }, 3000);
-      };
-    };
-
-    connect();
-    return () => {
-      const ws = wsRef.current;
-      wsRef.current = null;
-      ws?.close();
-    };
-  }, []);
-
-  // ── USD/NGN — fetch on mount + every 5 min ─────────────────────────────────
+  // Fetch real prices on mount and every 30s
   useEffect(() => {
     const apply = async () => {
-      const rate = await fetchNGN();
-      setState((prev) => ({
-        ...prev,
-        prices:  { ...prev.prices,  USDNGN: rate },
-        changes: { ...prev.changes, USDNGN: +((rate - openPricesRef.current.USDNGN) / openPricesRef.current.USDNGN * 100).toFixed(4) },
-      }));
-      if (openPricesRef.current.USDNGN === FALLBACK_PRICES.USDNGN) {
-        openPricesRef.current.USDNGN = rate;
-      }
+      const live = await fetchPrices();
+      if (!Object.keys(live).length) return;
+
+      setState((prev) => {
+        const prices  = { ...prev.prices };
+        const changes = { ...prev.changes };
+        const candles = { ...prev.candles };
+
+        (Object.keys(live) as AssetKey[]).forEach((a) => {
+          const p = live[a]!;
+          prices[a] = p;
+          if (openPricesRef.current[a] === FALLBACK_PRICES[a]) {
+            openPricesRef.current[a] = p;
+          }
+          changes[a] = +((p - openPricesRef.current[a]) / openPricesRef.current[a] * 100).toFixed(4);
+
+          // Anchor last candle to real price
+          const cs = candles[a];
+          if (cs.length > 0) {
+            const last = { ...cs[cs.length - 1], c: p, h: Math.max(cs[cs.length - 1].h, p), l: Math.min(cs[cs.length - 1].l, p) };
+            candles[a] = [...cs.slice(0, -1), last];
+          }
+        });
+        return { prices, changes, candles };
+      });
     };
+
     apply();
-    const iv = setInterval(apply, 5 * 60_000);
+    const iv = setInterval(apply, 30_000);
     return () => clearInterval(iv);
   }, []);
 
-  // ── Candle rotation every 60s ──────────────────────────────────────────────
+  // Simulated micro-ticks between real fetches
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setState((prev) => {
+        const prices  = { ...prev.prices };
+        const changes = { ...prev.changes };
+        const candles = { ...prev.candles };
+
+        (Object.keys(ASSET_CONFIG) as AssetKey[]).forEach((a) => {
+          const step = ASSET_CONFIG[a].step * 0.25;
+          const chg  = (Math.random() - 0.5) * prices[a] * step;
+          prices[a]  = +(prices[a] + chg).toFixed(a === "USDNGN" ? 0 : 2);
+          changes[a] = +((prices[a] - openPricesRef.current[a]) / openPricesRef.current[a] * 100).toFixed(4);
+
+          const cs = candles[a];
+          if (cs.length > 0) {
+            const last = { ...cs[cs.length - 1], c: prices[a], h: Math.max(cs[cs.length - 1].h, prices[a]), l: Math.min(cs[cs.length - 1].l, prices[a]) };
+            candles[a] = [...cs.slice(0, -1), last];
+          }
+        });
+        return { prices, changes, candles };
+      });
+    }, tickIntervalMs);
+    return () => clearInterval(iv);
+  }, [tickIntervalMs]);
+
   const addCandle = useCallback((asset: AssetKey) => {
     setState((prev) => {
       const last     = prev.candles[asset].at(-1);
@@ -193,7 +174,6 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
   return { ...state, addCandle, getOddsColor };
 }
 
-// ── Order book ─────────────────────────────────────────────────────────────────
 export function useOrderBook(midPrice: number, asset: AssetKey, depth: number = 8) {
   const [book, setBook] = useState<{
     asks: { price: number; size: number; total: number }[];
@@ -223,7 +203,6 @@ export function useOrderBook(midPrice: number, asset: AssetKey, depth: number = 
   return book;
 }
 
-// ── Ticker strip ───────────────────────────────────────────────────────────────
 export interface TickerItem {
   sym:   string;
   price: string;
