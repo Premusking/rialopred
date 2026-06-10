@@ -4,16 +4,22 @@ export type AssetKey = "BTC" | "ETH" | "USDNGN" | "SOL";
 
 export interface AssetConfig {
   sym:   string;
-  step:  number;                        // max % move per tick
+  step:  number;
   fmt:   (v: number) => string;
   color: string;
+  cgId:  string; // CoinGecko ID
 }
 
 export const ASSET_CONFIG: Record<AssetKey, AssetConfig> = {
-  BTC:    { sym: "BTC/USDT", step: 0.003, fmt: (v) => "$" + Math.round(v).toLocaleString(),              color: "#f7c948" },
-  ETH:    { sym: "ETH/USDT", step: 0.004, fmt: (v) => "$" + v.toFixed(2),                                color: "#4f8ef7" },
-  USDNGN: { sym: "USD/NGN",  step: 0.002, fmt: (v) => "₦" + Math.round(v).toLocaleString(),              color: "#00e5a0" },
-  SOL:    { sym: "SOL/USDT", step: 0.005, fmt: (v) => "$" + v.toFixed(2),                                color: "#c084fc" },
+  BTC:    { sym: "BTC/USDT", step: 0.003, fmt: (v) => "$" + Math.round(v).toLocaleString(),   color: "#f7c948", cgId: "bitcoin" },
+  ETH:    { sym: "ETH/USDT", step: 0.004, fmt: (v) => "$" + v.toFixed(2),                     color: "#4f8ef7", cgId: "ethereum" },
+  USDNGN: { sym: "USD/NGN",  step: 0.002, fmt: (v) => "₦" + Math.round(v).toLocaleString(),   color: "#00e5a0", cgId: "" },
+  SOL:    { sym: "SOL/USDT", step: 0.005, fmt: (v) => "$" + v.toFixed(2),                     color: "#c084fc", cgId: "solana" },
+};
+
+// Fallback prices if API fails
+const FALLBACK_PRICES: Record<AssetKey, number> = {
+  BTC: 105_420, ETH: 3_840, USDNGN: 1_580, SOL: 178.40,
 };
 
 export interface OHLCV {
@@ -23,16 +29,43 @@ export interface OHLCV {
 
 export interface PriceState {
   prices:    Record<AssetKey, number>;
-  changes:   Record<AssetKey, number>;   // % change from session open
+  changes:   Record<AssetKey, number>;
   candles:   Record<AssetKey, OHLCV[]>;
 }
 
-const INITIAL_PRICES: Record<AssetKey, number> = {
-  BTC: 105_420, ETH: 3_840, USDNGN: 1_580, SOL: 178.40,
-};
+async function fetchLivePrices(): Promise<Partial<Record<AssetKey, number>>> {
+  try {
+    // Fetch crypto prices from CoinGecko (free, no key needed)
+    const cgRes = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd",
+      { signal: AbortSignal.timeout(5000) }
+    );
+    const cg = await cgRes.json();
+
+    // Fetch USD/NGN from exchangerate-api (free tier)
+    let usdngn = FALLBACK_PRICES.USDNGN;
+    try {
+      const fxRes = await fetch(
+        "https://open.er-api.com/v6/latest/USD",
+        { signal: AbortSignal.timeout(5000) }
+      );
+      const fx = await fxRes.json();
+      if (fx?.rates?.NGN) usdngn = fx.rates.NGN;
+    } catch { /* use fallback */ }
+
+    return {
+      BTC:    cg?.bitcoin?.usd    ?? FALLBACK_PRICES.BTC,
+      ETH:    cg?.ethereum?.usd   ?? FALLBACK_PRICES.ETH,
+      SOL:    cg?.solana?.usd     ?? FALLBACK_PRICES.SOL,
+      USDNGN: usdngn,
+    };
+  } catch {
+    return {};
+  }
+}
 
 function genCandles(asset: AssetKey, n: number, startPrice?: number): OHLCV[] {
-  let p = startPrice ?? INITIAL_PRICES[asset];
+  let p = startPrice ?? FALLBACK_PRICES[asset];
   const step = ASSET_CONFIG[asset].step;
   const candles: OHLCV[] = [];
   for (let i = 0; i < n; i++) {
@@ -52,22 +85,12 @@ function genCandles(asset: AssetKey, n: number, startPrice?: number): OHLCV[] {
   return candles;
 }
 
-/**
- * usePrices — live price feed for all assets.
- *
- * In production: replace setInterval tick with a WebSocket subscription to
- * Rialo's on-chain price oracle or Binance/CoinGecko WS feed.
- *
- * Example production integration:
- *   const ws = new WebSocket("wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/ethusdt@kline_1m");
- *   ws.onmessage = (msg) => { const { k } = JSON.parse(msg.data).data; updateCandle(k); };
- */
 export function usePrices(tickIntervalMs: number = 1200): PriceState & {
-  addCandle:  (asset: AssetKey) => void;
+  addCandle:    (asset: AssetKey) => void;
   getOddsColor: (asset: AssetKey) => string;
 } {
   const [state, setState] = useState<PriceState>(() => {
-    const prices   = { ...INITIAL_PRICES } as Record<AssetKey, number>;
+    const prices   = { ...FALLBACK_PRICES } as Record<AssetKey, number>;
     const changes  = { BTC: 0, ETH: 0, USDNGN: 0, SOL: 0 } as Record<AssetKey, number>;
     const candles: Record<AssetKey, OHLCV[]> = {
       BTC: genCandles("BTC", 40), ETH: genCandles("ETH", 40),
@@ -76,8 +99,50 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
     return { prices, changes, candles };
   });
 
-  const openPricesRef = useRef<Record<AssetKey, number>>({ ...INITIAL_PRICES });
+  const openPricesRef = useRef<Record<AssetKey, number>>({ ...FALLBACK_PRICES });
+  const liveBaseRef   = useRef<Record<AssetKey, number>>({ ...FALLBACK_PRICES });
 
+  // Fetch real prices on mount and every 60s
+  useEffect(() => {
+    const applyLive = async () => {
+      const live = await fetchLivePrices();
+      if (Object.keys(live).length === 0) return;
+
+      setState((prev) => {
+        const prices  = { ...prev.prices };
+        const changes = { ...prev.changes };
+        const candles = { ...prev.candles };
+
+        (Object.keys(live) as AssetKey[]).forEach((a) => {
+          const livePrice = live[a]!;
+          prices[a]  = livePrice;
+          // Reset open price to live price on first fetch
+          if (openPricesRef.current[a] === FALLBACK_PRICES[a]) {
+            openPricesRef.current[a] = livePrice;
+          }
+          liveBaseRef.current[a] = livePrice;
+          changes[a] = +((livePrice - openPricesRef.current[a]) / openPricesRef.current[a] * 100).toFixed(4);
+
+          // Anchor candles to real price
+          const cs = candles[a];
+          if (cs.length > 0) {
+            const last = { ...cs[cs.length - 1] };
+            last.c = livePrice;
+            last.h = Math.max(last.h, livePrice);
+            last.l = Math.min(last.l, livePrice);
+            candles[a] = [...cs.slice(0, -1), last];
+          }
+        });
+        return { prices, changes, candles };
+      });
+    };
+
+    applyLive();
+    const iv = setInterval(applyLive, 60_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Simulated micro-ticks between real fetches (realistic feel)
   useEffect(() => {
     const iv = setInterval(() => {
       setState((prev) => {
@@ -86,14 +151,11 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
         const candles = { ...prev.candles };
 
         (Object.keys(ASSET_CONFIG) as AssetKey[]).forEach((a) => {
-          const step = ASSET_CONFIG[a].step;
+          const step = ASSET_CONFIG[a].step * 0.3; // smaller ticks between real updates
           const chg  = (Math.random() - 0.5) * prices[a] * step;
           prices[a]  = +(prices[a] + chg).toFixed(a === "USDNGN" ? 0 : 2);
-
-          // Update % change from session open
           changes[a] = +((prices[a] - openPricesRef.current[a]) / openPricesRef.current[a] * 100).toFixed(4);
 
-          // Extend the latest candle
           const cs = candles[a];
           if (cs.length > 0) {
             const last = { ...cs[cs.length - 1] };
@@ -113,8 +175,8 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
 
   const addCandle = useCallback((asset: AssetKey) => {
     setState((prev) => {
-      const last    = prev.candles[asset].at(-1);
-      const newOpen = last?.c ?? prev.prices[asset];
+      const last      = prev.candles[asset].at(-1);
+      const newOpen   = last?.c ?? prev.prices[asset];
       const newCandle = genCandles(asset, 1, newOpen)[0];
       newCandle.timestamp = Date.now();
       const candles = {
@@ -125,7 +187,6 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
     });
   }, []);
 
-  // New 1-min candle every 60s
   useEffect(() => {
     const iv = setInterval(() => {
       (Object.keys(ASSET_CONFIG) as AssetKey[]).forEach(addCandle);
@@ -140,10 +201,6 @@ export function usePrices(tickIntervalMs: number = 1200): PriceState & {
   return { ...state, addCandle, getOddsColor };
 }
 
-/**
- * useOrderBook — simulated order book for a given asset price.
- * In production: subscribe to Binance/Rialo DEX order book WebSocket.
- */
 export function useOrderBook(midPrice: number, asset: AssetKey, depth: number = 8) {
   const [book, setBook] = useState<{
     asks: { price: number; size: number; total: number }[];
@@ -174,9 +231,6 @@ export function useOrderBook(midPrice: number, asset: AssetKey, depth: number = 
   return book;
 }
 
-/**
- * useTicker — market-wide ticker items for the header ticker strip.
- */
 export interface TickerItem {
   sym:   string;
   price: string;

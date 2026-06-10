@@ -21,7 +21,7 @@ const FAUCET_TOKENS = [
 const COOLDOWN_HOURS = 24;
 
 export function FaucetPage({ showToast }: Props) {
-  const { connected, address, connect } = useWallet();
+  const { connected, address, connect, addBalance } = useWallet();
   const [claiming, setClaiming] = useState<string | null>(null);
   const [claimed, setClaimed] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<FaucetClaim[]>([]);
@@ -54,8 +54,11 @@ export function FaucetPage({ showToast }: Props) {
       { token: token.symbol, amount: token.amount, txHash, ts: "just now" },
       ...p,
     ]);
+    if (token.symbol === "USDC" || token.symbol === "SOL") {
+      addBalance(token.symbol, token.amount);
+    }
     setClaiming(null);
-    showToast(`${token.amount} ${token.symbol} sent to your wallet!`);
+    showToast(`${token.amount} ${token.symbol} added to your balance!`);
   };
 
   return (
