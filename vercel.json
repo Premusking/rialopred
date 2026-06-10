@@ -32,11 +32,5 @@
         { "key": "Service-Worker-Allowed", "value": "/" }
       ]
     }
-  ],
-  "env": {
-    "VITE_RIALO_RPC_DEVNET":  "@vite_rialo_rpc_devnet",
-    "VITE_RIALO_RPC_TESTNET": "@vite_rialo_rpc_testnet",
-    "VITE_PROGRAM_ID":        "@vite_program_id",
-    "VITE_MAGIC_KEY":         "@vite_magic_key"
-  }
+  ]
 }
